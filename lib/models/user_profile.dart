@@ -1,11 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
-/// Mirrors a `users/{uid}` Firestore document.
-///
-/// This is the CLIENT-SIDE source of truth the Flutter UI reads to decide
-/// what to render. It is intentionally separate from the Auth custom claims
-/// (which the security rules use) because claims lag behind a token refresh,
-/// while this Firestore doc is live via StreamBuilder and always current.
+/// Mirrors a user profile from the database.
 enum UserRole { superAdmin, orgAdmin, farmer, unknown }
 
 UserRole roleFromString(String? raw) {
@@ -74,22 +67,20 @@ class UserProfile {
   bool get isOrgAdmin => role == UserRole.orgAdmin;
   bool get isFarmer => role == UserRole.farmer;
 
-  /// Admin Dashboard is for SuperAdmin and OrgAdmin only. Farmers must never
-  /// reach this — enforced both here (routing) AND in firestore.rules
-  /// (data access), defense in depth.
   bool get canAccessAdminDashboard => isSuperAdmin || isOrgAdmin;
 
-  factory UserProfile.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? {};
+  factory UserProfile.fromMap(Map<String, dynamic> data) {
     return UserProfile(
-      uid: doc.id,
-      orgId: data['orgId'] as String? ?? '',
+      uid: data['id'] as String? ?? data['uid'] as String? ?? '',
+      orgId: data['org_id'] as String? ?? data['orgId'] as String? ?? '',
       role: roleFromString(data['role'] as String?),
       email: data['email'] as String? ?? '',
       phone: data['phone'] as String?,
-      displayName: data['displayName'] as String? ?? '',
+      displayName: data['display_name'] as String? ?? data['displayName'] as String? ?? '',
       status: statusFromString(data['status'] as String?),
-      createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+      createdAt: data['created_at'] != null 
+          ? DateTime.tryParse(data['created_at'] as String) 
+          : null,
     );
   }
 }

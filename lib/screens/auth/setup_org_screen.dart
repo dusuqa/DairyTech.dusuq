@@ -41,7 +41,10 @@ class _SetupOrgScreenState extends ConsumerState<SetupOrgScreen> {
       ref.invalidate(userProfileProvider);
     } catch (e) {
       setState(() {
-        _errorText = e.toString().replaceFirst('FirebaseException: ', '');
+        _errorText = e.toString()
+            .replaceFirst('FirebaseException: ', '')
+            .replaceFirst('AuthException: ', '')
+            .replaceFirst('PostgrestException: ', '');
       });
     } finally {
       if (mounted) setState(() => _loading = false);

@@ -1,11 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
-/// Mirrors `organizations/{orgId}`, including the `aggregates` map that the
-/// Cloud Functions in functions/index.js maintain incrementally
-/// (onMilkRecordWrite, onFinanceRecordWrite, onAnimalWrite,
-/// onUserWriteUpdateFarmerCount). The Admin Dashboard reads ONE document —
-/// this one — instead of summing potentially thousands of operational
-/// records on every page load.
 class Organization {
   final String id;
   final String name;
@@ -37,9 +29,6 @@ class Organization {
     this.lastUpdated,
   });
 
-  /// Milk total for the current calendar month, derived from the
-  /// month-keyed map so the dashboard can show "this month" without a
-  /// separate query or a separate counter to maintain.
   double get milkThisMonth {
     final now = DateTime.now();
     final key = '${now.year}-${now.month.toString().padLeft(2, '0')}';
@@ -54,42 +43,34 @@ class Organization {
     return milkByMonth[key] ?? 0;
   }
 
-  /// Percentage change month-over-month, null if no prior-month data exists
-  /// yet (avoids showing a misleading "+100%" or divide-by-zero on a
-  /// brand-new org's first month).
   double? get milkMonthOverMonthPct {
     if (milkLastMonth <= 0) return null;
     return ((milkThisMonth - milkLastMonth) / milkLastMonth) * 100;
   }
 
-  factory Organization.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? {};
-    final agg = (data['aggregates'] as Map<String, dynamic>?) ?? {};
-    final milkByMonthRaw = (agg['milkByMonth'] as Map<String, dynamic>?) ?? {};
-
+  factory Organization.fromMap(Map<String, dynamic> data) {
+    final milkByMonthRaw = (data['milk_by_month'] as Map<String, dynamic>?) ?? {};
     return Organization(
-      id: doc.id,
+      id: data['id'] as String? ?? '',
       name: data['name'] as String? ?? '(unnamed)',
-      planTier: data['planTier'] as String? ?? 'trial',
+      planTier: data['plan_tier'] as String? ?? data['planTier'] as String? ?? 'trial',
       status: data['status'] as String? ?? 'active',
-      animalCount: (data['animalCount'] as num?)?.toInt() ?? 0,
-      lactatingCount: (agg['lactatingCount'] as num?)?.toInt() ?? 0,
-      activeFarmerCount: (agg['activeFarmerCount'] as num?)?.toInt() ?? 0,
-      totalMilkLiters: (agg['totalMilkLiters'] as num?)?.toDouble() ?? 0,
-      totalIncome: (agg['totalIncome'] as num?)?.toDouble() ?? 0,
-      totalExpense: (agg['totalExpense'] as num?)?.toDouble() ?? 0,
-      netRevenue: (agg['netRevenue'] as num?)?.toDouble() ?? 0,
+      animalCount: (data['animal_count'] as num? ?? data['animalCount'] as num?)?.toInt() ?? 0,
+      lactatingCount: (data['lactating_count'] as num? ?? data['lactatingCount'] as num?)?.toInt() ?? 0,
+      activeFarmerCount: (data['active_farmer_count'] as num? ?? data['activeFarmerCount'] as num?)?.toInt() ?? 0,
+      totalMilkLiters: (data['total_milk_liters'] as num? ?? data['totalMilkLiters'] as num?)?.toDouble() ?? 0,
+      totalIncome: (data['total_income'] as num? ?? data['totalIncome'] as num?)?.toDouble() ?? 0,
+      totalExpense: (data['total_expense'] as num? ?? data['totalExpense'] as num?)?.toDouble() ?? 0,
+      netRevenue: (data['net_revenue'] as num? ?? data['netRevenue'] as num?)?.toDouble() ?? 0,
       milkByMonth: milkByMonthRaw.map((k, v) => MapEntry(k, (v as num).toDouble())),
-      lastUpdated: (agg['lastUpdated'] as Timestamp?)?.toDate(),
+      lastUpdated: data['last_updated'] != null
+          ? DateTime.tryParse(data['last_updated'] as String)
+          : data['lastUpdated'] != null
+              ? DateTime.tryParse(data['lastUpdated'] as String)
+              : null,
     );
   }
 
-  /// Combines multiple Organization snapshots into one synthetic aggregate —
-  /// used only by SuperAdmin's "all organizations" view. This IS a live
-  /// client-side sum, but over N organization documents (dozens, not
-  /// thousands of operational records), so it stays cheap. See the comment
-  /// in functions/index.js explaining why this one case is deliberately
-  /// NOT pre-aggregated server-side.
   static Organization combine(List<Organization> orgs) {
     final combinedMilkByMonth = <String, double>{};
     for (final org in orgs) {

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:dusuq/services/auth_service.dart';
 
@@ -58,7 +58,7 @@ class _LoginScreenState extends State<LoginScreen> {
       // Navigation happens automatically — the router listens to
       // authStateChanges + watchUserProfile and redirects based on role.
       // This screen does not navigate manually.
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       _setError(_friendlyAuthError(e));
     } catch (e) {
       _setError('Something went wrong. Please try again.');
@@ -74,7 +74,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       await widget.authService.signInWithGoogle();
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       _setError(_friendlyAuthError(e));
     } catch (e) {
       _setError('Google sign-in failed. Please try again.');
@@ -127,32 +127,31 @@ class _LoginScreenState extends State<LoginScreen> {
         verificationId: _verificationId!,
         smsCode: code,
       );
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       _setError(_friendlyAuthError(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  String _friendlyAuthError(FirebaseAuthException e) {
-    switch (e.code) {
-      case 'user-not-found':
-      case 'wrong-password':
-      case 'invalid-credential':
-        return 'Incorrect email or password.';
-      case 'invalid-email':
-        return 'That email address looks invalid.';
-      case 'user-disabled':
-        return 'This account has been disabled. Contact your farm admin.';
-      case 'too-many-requests':
-        return 'Too many attempts. Please wait a moment and try again.';
-      case 'invalid-verification-code':
-        return 'That code is incorrect. Check and try again.';
-      case 'network-request-failed':
-        return 'No internet connection. Check your signal and retry.';
-      default:
-        return e.message ?? 'Login failed. Please try again.';
+  String _friendlyAuthError(AuthException e) {
+    final msg = e.message.toLowerCase();
+    if (msg.contains('invalid login credentials') || msg.contains('wrong password') || msg.contains('user not found')) {
+      return 'Incorrect email or password.';
     }
+    if (msg.contains('email') && msg.contains('invalid')) {
+      return 'That email address looks invalid.';
+    }
+    if (msg.contains('disabled')) {
+      return 'This account has been disabled. Contact your farm admin.';
+    }
+    if (msg.contains('too many requests')) {
+      return 'Too many attempts. Please wait a moment and try again.';
+    }
+    if (msg.contains('verification') || msg.contains('otp')) {
+      return 'That code is incorrect. Check and try again.';
+    }
+    return e.message;
   }
 
   @override

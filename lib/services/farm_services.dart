@@ -1,40 +1,10 @@
-// =============================================================================
-// DUSUQ - Dairy Farm ERP
-// Services: MilkService | BreedingService
-//
-// IMPORTANT — REPLACES the original farm_services.dart MilkService/
-// BreedingService implementations. The original single-tenant versions
-// queried milk_records/breeding_records with no orgId filter — under the
-// new firestore.rules, an unfiltered query would now return PERMISSION
-// DENIED for any document outside the caller's org (rules deny at the
-// document level, but Firestore still requires the query itself to be
-// shaped compatibly — an unscoped collection().snapshots() works for
-// SuperAdmin only). Every method below takes orgId explicitly so a Farmer
-// or OrgAdmin's queries are scoped correctly and don't trip rule denials
-// on partial result sets.
-//
-// FeedService / MedicalService follow the identical pattern — not written
-// out here to keep this file focused on the two services the farmer tiles
-// in this task actually need; replicate this same orgId-scoping shape for
-// those two when wiring the Feed Log and Health Log tiles next.
-// =============================================================================
-
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:dusuq/models/farm_models.dart';
 
 class MilkService {
-  final FirebaseFirestore _db;
-  MilkService({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
+  final SupabaseClient _supabase;
+  MilkService({SupabaseClient? client}) : _supabase = client ?? Supabase.instance.client;
 
-  CollectionReference<Map<String, dynamic>> get _col =>
-      _db.collection('milk_records');
-
-  /// Add a new milk record. orgId and createdBy are required arguments
-  /// (not optional, not defaulted) specifically so a caller can't
-  /// accidentally omit them and create an orphaned record that the
-  /// security rules' `request.resource.data.orgId == orgId()` check would
-  /// reject anyway — better to fail at the Dart type level than at the
-  /// network round-trip.
   Future<String> addRecord({
     required String orgId,
     required String animalId,
@@ -44,7 +14,7 @@ class MilkService {
     required String createdBy,
   }) async {
     final record = MilkRecord(
-      id: '', // assigned by Firestore
+      id: '',
       orgId: orgId,
       animalId: animalId,
       date: date,
@@ -52,83 +22,86 @@ class MilkService {
       session: session,
       createdBy: createdBy,
     );
-    final ref = await _col.add(record.toFirestore());
-    return ref.id;
+    final response = await _supabase.from('milk_records').insert(record.toMap()).select('id').single();
+    return response['id'] as String;
   }
 
   Future<void> updateRecord(MilkRecord record) =>
-      _col.doc(record.id).update(record.toFirestore());
+      _supabase.from('milk_records').update(record.toMap()).eq('id', record.id);
 
-  Future<void> deleteRecord(String recordId) => _col.doc(recordId).delete();
+  Future<void> deleteRecord(String recordId) =>
+      _supabase.from('milk_records').delete().eq('id', recordId);
 
-  /// Live stream of today's milk records for one org — what the farmer's
-  /// quick-entry screen shows as "already logged today".
+  /// Live stream of today's milk records for one org.
   Stream<List<MilkRecord>> watchToday(String orgId) {
     final now = DateTime.now();
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
 
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('date', isLessThan: Timestamp.fromDate(endOfDay))
-        .orderBy('date', descending: true)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => MilkRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('milk_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list
+              .map((m) => MilkRecord.fromMap(m))
+              .where((r) => r.date.isAfter(startOfDay) && r.date.isBefore(endOfDay))
+              .toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records;
+        });
   }
 
-  /// Records for one specific animal across a date range (used by
-  /// animal_detail_screen's Milk tab).
+  /// Records for one specific animal across a date range.
   Stream<List<MilkRecord>> watchForAnimal({
     required String orgId,
     required String animalId,
     DateTime? from,
     DateTime? to,
   }) {
-    Query<Map<String, dynamic>> q = _col
-        .where('orgId', isEqualTo: orgId)
-        .where('animalId', isEqualTo: animalId);
-    if (from != null) {
-      q = q.where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(from));
-    }
-    if (to != null) {
-      q = q.where('date', isLessThanOrEqualTo: Timestamp.fromDate(to));
-    }
-    return q
-        .orderBy('date', descending: true)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => MilkRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('milk_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          var records = list
+              .map((m) => MilkRecord.fromMap(m))
+              .where((r) => r.animalId == animalId);
+          if (from != null) {
+            records = records.where((r) => r.date.isAtSameMomentAs(from) || r.date.isAfter(from));
+          }
+          if (to != null) {
+            records = records.where((r) => r.date.isAtSameMomentAs(to) || r.date.isBefore(to));
+          }
+          final sorted = records.toList();
+          sorted.sort((a, b) => b.date.compareTo(a.date));
+          return sorted;
+        });
   }
 
-  /// One-off total for a date range — used for ad-hoc reports. For the
-  /// Admin Dashboard's running totals, prefer the maintained aggregate on
-  /// organizations/{orgId} (see OrganizationService) instead of calling
-  /// this repeatedly; this method still reads every matching document and
-  /// is appropriate for bounded, occasional queries (e.g. "show me last
-  /// week"), not for a metric refreshed on every dashboard open.
+  /// One-off total for a date range.
   Future<double> totalForRange({
     required String orgId,
     required DateTime from,
     required DateTime to,
   }) async {
-    final snap = await _col
-        .where('orgId', isEqualTo: orgId)
-        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
-        .where('date', isLessThanOrEqualTo: Timestamp.fromDate(to))
-        .get();
-    return snap.docs.fold<double>(
+    final response = await _supabase
+        .from('milk_records')
+        .select('quantity')
+        .eq('org_id', orgId)
+        .gte('date', from.toUtc().toIso8601String())
+        .lte('date', to.toUtc().toIso8601String());
+    
+    return (response as List).fold<double>(
       0,
-      (sum, doc) => sum + ((doc.data()['quantity'] as num?)?.toDouble() ?? 0),
+      (sum, row) => sum + ((row['quantity'] as num?)?.toDouble() ?? 0),
     );
   }
 }
 
 class BreedingService {
-  final FirebaseFirestore _db;
-  BreedingService({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
-
-  CollectionReference<Map<String, dynamic>> get _col =>
-      _db.collection('breeding_records');
+  final SupabaseClient _supabase;
+  BreedingService({SupabaseClient? client}) : _supabase = client ?? Supabase.instance.client;
 
   Future<String> addRecord({
     required String orgId,
@@ -141,9 +114,6 @@ class BreedingService {
     String? notes,
     required String createdBy,
   }) async {
-    // Auto-compute expected calving date when an AI/service event is
-    // logged, same logic as the Sheets version (date + 280 days). Farmer
-    // never has to calculate this by hand.
     DateTime? expectedCalving;
     if (event == BreedingEvent.aiDone || event == BreedingEvent.naturalService) {
       expectedCalving = date.add(const Duration(days: 280));
@@ -162,64 +132,74 @@ class BreedingService {
       notes: notes,
       createdBy: createdBy,
     );
-    final ref = await _col.add(record.toFirestore());
-    return ref.id;
+    final response = await _supabase.from('breeding_records').insert(record.toMap()).select('id').single();
+    return response['id'] as String;
   }
 
-  Future<void> deleteRecord(String recordId) => _col.doc(recordId).delete();
+  Future<void> deleteRecord(String recordId) =>
+      _supabase.from('breeding_records').delete().eq('id', recordId);
 
   Stream<List<BreedingRecord>> watchForAnimal({
     required String orgId,
     required String animalId,
   }) {
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .where('animalId', isEqualTo: animalId)
-        .orderBy('date', descending: true)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => BreedingRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('breeding_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list
+              .map((m) => BreedingRecord.fromMap(m))
+              .where((r) => r.animalId == animalId)
+              .toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records;
+        });
   }
 
-  /// Animals with an expected calving date in the next N days — the
-  /// "calving reminders" capability from the original MVP, now org-scoped.
-  /// NOTE: this requires a composite index on (orgId ASC, expectedCalvingDate ASC) —
-  /// see FIRESTORE_SCHEMA.md for the full index list to add.
+  /// Animals with an expected calving date in the next N days.
   Stream<List<BreedingRecord>> watchUpcomingCalvings({
     required String orgId,
     int withinDays = 30,
   }) {
     final now = DateTime.now();
     final cutoff = now.add(Duration(days: withinDays));
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .where('expectedCalvingDate', isGreaterThanOrEqualTo: Timestamp.fromDate(now))
-        .where('expectedCalvingDate', isLessThanOrEqualTo: Timestamp.fromDate(cutoff))
-        .orderBy('expectedCalvingDate')
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => BreedingRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('breeding_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list
+              .map((m) => BreedingRecord.fromMap(m))
+              .where((r) => r.expectedCalvingDate != null &&
+                            (r.expectedCalvingDate!.isAtSameMomentAs(now) || r.expectedCalvingDate!.isAfter(now)) &&
+                            (r.expectedCalvingDate!.isAtSameMomentAs(cutoff) || r.expectedCalvingDate!.isBefore(cutoff)))
+              .toList();
+          records.sort((a, b) => a.expectedCalvingDate!.compareTo(b.expectedCalvingDate!));
+          return records;
+        });
   }
 
-  /// Recent breeding events across the whole org (not filtered to one
-  /// animal) — used by the farmer tile's activity list.
+  /// Recent breeding events across the whole org.
   Stream<List<BreedingRecord>> watchRecent({
     required String orgId,
     int limit = 20,
   }) {
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .orderBy('date', descending: true)
-        .limit(limit)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => BreedingRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('breeding_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list.map((m) => BreedingRecord.fromMap(m)).toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records.take(limit).toList();
+        });
   }
 }
 
 class FeedService {
-  final FirebaseFirestore _db;
-  FeedService({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
-
-  CollectionReference<Map<String, dynamic>> get _col =>
-      _db.collection('feed_expenses');
+  final SupabaseClient _supabase;
+  FeedService({SupabaseClient? client}) : _supabase = client ?? Supabase.instance.client;
 
   Future<String> addRecord({
     required String orgId,
@@ -242,74 +222,72 @@ class FeedService {
       date: date,
       createdBy: createdBy,
     );
-    final ref = await _col.add(record.toFirestore());
-    return ref.id;
+    final response = await _supabase.from('feed_expenses').insert(record.toMap()).select('id').single();
+    return response['id'] as String;
   }
 
-  Future<void> deleteRecord(String recordId) => _col.doc(recordId).delete();
+  Future<void> deleteRecord(String recordId) =>
+      _supabase.from('feed_expenses').delete().eq('id', recordId);
 
-  /// Today's feed purchases for one org — mirrors MilkService.watchToday,
-  /// shown beneath the entry form so a farmhand sees what's already been
-  /// logged today without leaving the screen.
+  /// Today's feed purchases for one org.
   Stream<List<FeedExpense>> watchToday(String orgId) {
     final now = DateTime.now();
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
 
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('date', isLessThan: Timestamp.fromDate(endOfDay))
-        .orderBy('date', descending: true)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => FeedExpense.fromFirestore(d)).toList());
+    return _supabase
+        .from('feed_expenses')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list
+              .map((m) => FeedExpense.fromMap(m))
+              .where((r) => r.date.isAfter(startOfDay) && r.date.isBefore(endOfDay))
+              .toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records;
+        });
   }
 
-  /// Recent feed purchases across the org, not date-bounded — used for a
-  /// general activity list (e.g. "last 20 purchases") rather than a
-  /// strictly-today view.
+  /// Recent feed purchases across the org.
   Stream<List<FeedExpense>> watchRecent({
     required String orgId,
     int limit = 20,
   }) {
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .orderBy('date', descending: true)
-        .limit(limit)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => FeedExpense.fromFirestore(d)).toList());
+    return _supabase
+        .from('feed_expenses')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list.map((m) => FeedExpense.fromMap(m)).toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records.take(limit).toList();
+        });
   }
 
-  /// One-off cost total for a date range. As with MilkService.totalForRange,
-  /// this reads every matching document — fine for bounded ad-hoc reports,
-  /// not for a metric refreshed on every dashboard open (use a maintained
-  /// aggregate on organizations/{orgId} for that instead — feed cost isn't
-  /// wired into the aggregate Cloud Functions yet; add an onFeedExpenseWrite
-  /// trigger mirroring onMilkRecordWrite if/when a "Total Feed Cost"
-  /// dashboard tile is needed).
+  /// One-off cost total for a date range.
   Future<double> totalCostForRange({
     required String orgId,
     required DateTime from,
     required DateTime to,
   }) async {
-    final snap = await _col
-        .where('orgId', isEqualTo: orgId)
-        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
-        .where('date', isLessThanOrEqualTo: Timestamp.fromDate(to))
-        .get();
-    return snap.docs.fold<double>(
+    final response = await _supabase
+        .from('feed_expenses')
+        .select('cost')
+        .eq('org_id', orgId)
+        .gte('date', from.toUtc().toIso8601String())
+        .lte('date', to.toUtc().toIso8601String());
+
+    return (response as List).fold<double>(
       0,
-      (sum, doc) => sum + ((doc.data()['cost'] as num?)?.toDouble() ?? 0),
+      (sum, row) => sum + ((row['cost'] as num?)?.toDouble() ?? 0),
     );
   }
 }
 
 class MedicalService {
-  final FirebaseFirestore _db;
-  MedicalService({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
-
-  CollectionReference<Map<String, dynamic>> get _col =>
-      _db.collection('medical_records');
+  final SupabaseClient _supabase;
+  MedicalService({SupabaseClient? client}) : _supabase = client ?? Supabase.instance.client;
 
   Future<String> addRecord({
     required String orgId,
@@ -340,56 +318,66 @@ class MedicalService {
       notes: notes,
       createdBy: createdBy,
     );
-    final ref = await _col.add(record.toFirestore());
-    return ref.id;
+    final response = await _supabase.from('medical_records').insert(record.toMap()).select('id').single();
+    return response['id'] as String;
   }
 
-  Future<void> deleteRecord(String recordId) => _col.doc(recordId).delete();
+  Future<void> deleteRecord(String recordId) =>
+      _supabase.from('medical_records').delete().eq('id', recordId);
 
   Stream<List<MedicalRecord>> watchForAnimal({
     required String orgId,
     required String animalId,
   }) {
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .where('animalId', isEqualTo: animalId)
-        .orderBy('date', descending: true)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => MedicalRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('medical_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list
+              .map((m) => MedicalRecord.fromMap(m))
+              .where((r) => r.animalId == animalId)
+              .toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records;
+        });
   }
 
   Stream<List<MedicalRecord>> watchRecent({
     required String orgId,
     int limit = 20,
   }) {
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .orderBy('date', descending: true)
-        .limit(limit)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => MedicalRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('medical_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list.map((m) => MedicalRecord.fromMap(m)).toList();
+          records.sort((a, b) => b.date.compareTo(a.date));
+          return records.take(limit).toList();
+        });
   }
 
-  /// Records with a follow-up date in the next N days — surfaces things
-  /// like "re-check this animal's mastitis treatment in 5 days" so an
-  /// OrgAdmin or farmer doesn't have to remember manually. Mirrors
-  /// BreedingService.watchUpcomingCalvings' shape intentionally, since both
-  /// are "things coming due soon" queries the dashboard/field view could
-  /// surface the same way.
-  /// NOTE: requires composite index (orgId ASC, followUpDate ASC) — add to
-  /// FIRESTORE_SCHEMA.md's index list before relying on this in production.
+  /// Records with a follow-up date in the next N days.
   Stream<List<MedicalRecord>> watchUpcomingFollowUps({
     required String orgId,
     int withinDays = 14,
   }) {
     final now = DateTime.now();
     final cutoff = now.add(Duration(days: withinDays));
-    return _col
-        .where('orgId', isEqualTo: orgId)
-        .where('followUpDate', isGreaterThanOrEqualTo: Timestamp.fromDate(now))
-        .where('followUpDate', isLessThanOrEqualTo: Timestamp.fromDate(cutoff))
-        .orderBy('followUpDate')
-        .snapshots()
-        .map((snap) => snap.docs.map((d) => MedicalRecord.fromFirestore(d)).toList());
+    return _supabase
+        .from('medical_records')
+        .stream(primaryKey: ['id'])
+        .eq('org_id', orgId)
+        .map((list) {
+          final records = list
+              .map((m) => MedicalRecord.fromMap(m))
+              .where((r) => r.followUpDate != null &&
+                            (r.followUpDate!.isAtSameMomentAs(now) || r.followUpDate!.isAfter(now)) &&
+                            (r.followUpDate!.isAtSameMomentAs(cutoff) || r.followUpDate!.isBefore(cutoff)))
+              .toList();
+          records.sort((a, b) => a.followUpDate!.compareTo(b.followUpDate!));
+          return records;
+        });
   }
 }

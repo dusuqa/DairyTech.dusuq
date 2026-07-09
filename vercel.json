@@ -1,0 +1,9 @@
+{
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/((?!assets/|web/|favicon.png|manifest.json|main.dart.js|flutter_bootstrap.js|flutter_service_worker.js).*)$",
+      "destination": "/index.html"
+    }
+  ]
+}

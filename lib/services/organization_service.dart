@@ -1,30 +1,24 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:dusuq/models/organization.dart';
 
 class OrganizationService {
-  final FirebaseFirestore _db;
-  OrganizationService({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
+  final SupabaseClient _supabase;
+  OrganizationService({SupabaseClient? client}) : _supabase = client ?? Supabase.instance.client;
 
-  /// OrgAdmin view: a single live document read. This is the cheap,
-  /// real-time path — Firestore rules also restrict an OrgAdmin to only
-  /// being able to read their own org doc, so this query can't accidentally
-  /// leak another tenant's numbers even if called wrong.
+  /// OrgAdmin view: a single live document read.
   Stream<Organization?> watchOrganization(String orgId) {
-    return _db.collection('organizations').doc(orgId).snapshots().map((doc) {
-      if (!doc.exists) return null;
-      return Organization.fromFirestore(doc);
-    });
+    return _supabase
+        .from('organizations')
+        .stream(primaryKey: ['id'])
+        .eq('id', orgId)
+        .map((list) => list.isEmpty ? null : Organization.fromMap(list.first));
   }
 
-  /// SuperAdmin view: every organization doc, combined client-side. Cheap
-  /// because it scales with org COUNT (dozens), not with operational
-  /// record count (which could be in the hundreds of thousands across a
-  /// season). See Organization.combine() and the matching comment in
-  /// functions/index.js for why this is deliberately a live query rather
-  /// than another maintained aggregate.
+  /// SuperAdmin view: every organization doc, combined client-side.
   Stream<List<Organization>> watchAllOrganizations() {
-    return _db.collection('organizations').snapshots().map((snap) {
-      return snap.docs.map((d) => Organization.fromFirestore(d)).toList();
-    });
+    return _supabase
+        .from('organizations')
+        .stream(primaryKey: ['id'])
+        .map((list) => list.map((m) => Organization.fromMap(m)).toList());
   }
 }

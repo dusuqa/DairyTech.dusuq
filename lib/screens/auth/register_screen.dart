@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
 import 'package:dusuq/providers/auth_providers.dart';
 
@@ -48,7 +48,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
         _passwordCtrl.text,
       );
       await authService.sendEmailVerification();
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       _setError(_friendlyAuthError(e));
     } catch (e) {
       _setError('Signup failed. Please try again.');
@@ -64,7 +64,7 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     });
     try {
       await ref.read(authServiceProvider).signInWithGoogle();
-    } on FirebaseAuthException catch (e) {
+    } on AuthException catch (e) {
       _setError(_friendlyAuthError(e));
     } catch (e) {
       _setError('Google sign-in failed. Please try again.');
@@ -73,19 +73,18 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
     }
   }
 
-  String _friendlyAuthError(FirebaseAuthException e) {
-    switch (e.code) {
-      case 'email-already-in-use':
-        return 'This email address is already in use.';
-      case 'invalid-email':
-        return 'Please enter a valid email address.';
-      case 'weak-password':
-        return 'The password is too weak (min 6 characters).';
-      case 'operation-not-allowed':
-        return 'Email/password signup is not enabled.';
-      default:
-        return e.message ?? 'Registration failed. Please try again.';
+  String _friendlyAuthError(AuthException e) {
+    final msg = e.message.toLowerCase();
+    if (msg.contains('already in use') || msg.contains('already exists')) {
+      return 'This email address is already in use.';
     }
+    if (msg.contains('email') && msg.contains('invalid')) {
+      return 'Please enter a valid email address.';
+    }
+    if (msg.contains('weak') || msg.contains('too short')) {
+      return 'The password is too weak (min 6 characters).';
+    }
+    return e.message;
   }
 
   @override

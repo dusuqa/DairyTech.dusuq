@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PendingInviteScreen extends StatelessWidget {
   const PendingInviteScreen({super.key});
@@ -27,7 +27,7 @@ class PendingInviteScreen extends StatelessWidget {
               ),
               const SizedBox(height: 32),
               ElevatedButton.icon(
-                onPressed: () => FirebaseAuth.instance.signOut(),
+                onPressed: () => Supabase.instance.client.auth.signOut(),
                 icon: const Icon(Icons.logout),
                 label: const Text('Sign Out'),
               ),

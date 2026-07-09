@@ -1,29 +1,19 @@
 // =============================================================================
 // DUSUQ - Dairy Farm ERP
 // Models: MilkRecord | FeedExpense | BreedingRecord | MedicalRecord
-//
-// CHANGE FROM ORIGINAL MVP MODELS:
-// Every model below gains two fields that didn't exist in the single-tenant
-// version: `orgId` (immutable, set once at creation — see firestore.rules)
-// and `createdBy` (the uid of whoever logged the entry — lets an OrgAdmin
-// see which farmhand entered what, useful for accountability and for the
-// finance_records read-scoping rule that restricts Farmers to their own
-// entries). Every other field is unchanged from the original models.
 // =============================================================================
-
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 // ─────────────────────────────────────────────────────────────────────────
 // MilkRecord — daily production per animal
 // ─────────────────────────────────────────────────────────────────────────
 class MilkRecord {
   final String id;
-  final String orgId; // NEW — immutable, scopes this record to a tenant
+  final String orgId;
   final String animalId;
   final DateTime date;
   final double quantity; // litres
-  final String? session; // "Morning" | "Evening" | "Midday" — optional, additive
-  final String createdBy; // NEW — uid of the farmhand who logged this
+  final String? session; // "Morning" | "Evening" | "Midday"
+  final String createdBy;
 
   const MilkRecord({
     required this.id,
@@ -35,26 +25,25 @@ class MilkRecord {
     required this.createdBy,
   });
 
-  factory MilkRecord.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory MilkRecord.fromMap(Map<String, dynamic> data) {
     return MilkRecord(
-      id: doc.id,
-      orgId: data['orgId'] as String? ?? '',
-      animalId: data['animalId'] as String,
-      date: (data['date'] as Timestamp).toDate(),
+      id: data['id'] as String? ?? '',
+      orgId: data['org_id'] as String? ?? data['orgId'] as String? ?? '',
+      animalId: data['animal_id'] as String? ?? data['animalId'] as String? ?? '',
+      date: DateTime.parse(data['date'] as String).toLocal(),
       quantity: (data['quantity'] as num).toDouble(),
       session: data['session'] as String?,
-      createdBy: data['createdBy'] as String? ?? '',
+      createdBy: data['created_by'] as String? ?? data['createdBy'] as String? ?? '',
     );
   }
 
-  Map<String, dynamic> toFirestore() => {
-        'orgId': orgId,
-        'animalId': animalId,
-        'date': Timestamp.fromDate(date),
+  Map<String, dynamic> toMap() => {
+        'org_id': orgId,
+        'animal_id': animalId,
+        'date': date.toUtc().toIso8601String(),
         'quantity': quantity,
         if (session != null) 'session': session,
-        'createdBy': createdBy,
+        'created_by': createdBy,
       };
 
   MilkRecord copyWith({
@@ -79,18 +68,6 @@ class MilkRecord {
 
 // ─────────────────────────────────────────────────────────────────────────
 // FeedExpense — feed purchases and costs.
-//
-// `type` stays free-text-backed-by-a-UI-dropdown (not a Dart enum) since,
-// unlike BreedingEvent/HealthCategory, nothing in the app branches on feed
-// type — it's a label, not a driver of business logic. The dropdown options
-// live in the entry screen (see feed_entry_screen.dart) and match the
-// Sheets logbook's local terminology (Wanda, Bhoosa, Chokar, etc.).
-//
-// ADDED vs. original MVP shape: `unit` (the original had a bare `quantity`
-// with no unit — meaningless for a dashboard cost-per-unit calc without
-// knowing if it's kg, a Maund, or a trolley load) and `supplier` (matches
-// the Sheets Feed Log, useful for an OrgAdmin tracking which vendor to
-// reorder from).
 // ─────────────────────────────────────────────────────────────────────────
 class FeedExpense {
   final String id;
@@ -115,55 +92,34 @@ class FeedExpense {
     required this.createdBy,
   });
 
-  factory FeedExpense.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory FeedExpense.fromMap(Map<String, dynamic> data) {
     return FeedExpense(
-      id: doc.id,
-      orgId: data['orgId'] as String? ?? '',
-      type: data['type'] as String,
+      id: data['id'] as String? ?? '',
+      orgId: data['org_id'] as String? ?? data['orgId'] as String? ?? '',
+      type: data['type'] as String? ?? '',
       cost: (data['cost'] as num).toDouble(),
       quantity: (data['quantity'] as num).toDouble(),
-      // Old-shape docs (pre-unit) default to "kg" rather than throwing —
-      // approximate but never wrong in a way that crashes the list view.
       unit: data['unit'] as String? ?? 'kg',
       supplier: data['supplier'] as String?,
-      date: (data['date'] as Timestamp).toDate(),
-      createdBy: data['createdBy'] as String? ?? '',
+      date: DateTime.parse(data['date'] as String).toLocal(),
+      createdBy: data['created_by'] as String? ?? data['createdBy'] as String? ?? '',
     );
   }
 
-  Map<String, dynamic> toFirestore() => {
-        'orgId': orgId,
+  Map<String, dynamic> toMap() => {
+        'org_id': orgId,
         'type': type,
         'cost': cost,
         'quantity': quantity,
         'unit': unit,
         if (supplier != null) 'supplier': supplier,
-        'date': Timestamp.fromDate(date),
-        'createdBy': createdBy,
+        'date': date.toUtc().toIso8601String(),
+        'created_by': createdBy,
       };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// BreedingRecord — EXPANDED workflow (was: pending/confirmed/calved/failed)
-//
-// The 4-state enum couldn't represent the actual sequence of events a
-// farmhand observes: detecting heat, the AI/service event itself, a
-// pregnancy check days/weeks later, and finally calving. Collapsing all of
-// that into "pending" lost information the Breeding Log (Sheets version)
-// already captured. This expands BreedingStatus into BreedingEvent — note
-// the rename, since "status" implied a single current state machine, while
-// "event" correctly models this as a LOG of discrete things that happened,
-// which is what the UI and the rest of the system actually need.
-//
-// MIGRATION NOTE: any existing BreedingRecord documents using the old
-// 4-value enum will fail to parse against BreedingEvent.values.firstWhere
-// and fall through to the orElse default (oestrusDetected) — see fromFirestore
-// below. If you have real BreedingRecord data already in Firestore under the
-// old schema, run a one-time migration script mapping old->new values before
-// shipping this (pending->oestrusDetected, confirmed->pregnancyCheckPositive,
-// calved->calving, failed->pregnancyCheckNegative) rather than relying on
-// the fallback, which would silently misclassify historical records.
+// BreedingRecord — EXPANDED workflow
 // ─────────────────────────────────────────────────────────────────────────
 enum BreedingEvent {
   oestrusDetected,
@@ -204,13 +160,12 @@ class BreedingRecord {
   final String id;
   final String orgId;
   final String animalId;
-  final DateTime date; // renamed from breedingDate — this is the event date,
-  // not necessarily a breeding date (e.g. a pregnancy check has its own date)
+  final DateTime date;
   final BreedingEvent event;
-  final String? method; // "Artificial Insemination" | "Natural Mount" | null
+  final String? method; // "Artificial Insemination" | "Natural Mount"
   final String? bullSireId;
   final String? technicianName;
-  final DateTime? expectedCalvingDate; // auto-computed +280 days when event==aiDone
+  final DateTime? expectedCalvingDate;
   final String? notes;
   final String createdBy;
 
@@ -228,65 +183,46 @@ class BreedingRecord {
     required this.createdBy,
   });
 
-  factory BreedingRecord.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
+  factory BreedingRecord.fromMap(Map<String, dynamic> data) {
     return BreedingRecord(
-      id: doc.id,
-      orgId: data['orgId'] as String? ?? '',
-      animalId: data['animalId'] as String,
-      date: (data['date'] as Timestamp).toDate(),
+      id: data['id'] as String? ?? '',
+      orgId: data['org_id'] as String? ?? data['orgId'] as String? ?? '',
+      animalId: data['animal_id'] as String? ?? data['animalId'] as String? ?? '',
+      date: DateTime.parse(data['date'] as String).toLocal(),
       event: BreedingEvent.values.firstWhere(
         (e) => e.name == data['event'],
-        // See migration note above — this fallback exists so a malformed
-        // or pre-migration doc doesn't crash the app, but it WILL silently
-        // misclassify old data. Don't rely on it past the migration window.
         orElse: () => BreedingEvent.oestrusDetected,
       ),
       method: data['method'] as String?,
-      bullSireId: data['bullSireId'] as String?,
-      technicianName: data['technicianName'] as String?,
-      expectedCalvingDate:
-          (data['expectedCalvingDate'] as Timestamp?)?.toDate(),
+      bullSireId: data['bull_sire_id'] as String? ?? data['bullSireId'] as String?,
+      technicianName: data['technician_name'] as String? ?? data['technicianName'] as String?,
+      expectedCalvingDate: data['expected_calving_date'] != null
+          ? DateTime.parse(data['expected_calving_date'] as String).toLocal()
+          : data['expectedCalvingDate'] != null
+              ? DateTime.parse(data['expectedCalvingDate'] as String).toLocal()
+              : null,
       notes: data['notes'] as String?,
-      createdBy: data['createdBy'] as String? ?? '',
+      createdBy: data['created_by'] as String? ?? data['createdBy'] as String? ?? '',
     );
   }
 
-  Map<String, dynamic> toFirestore() => {
-        'orgId': orgId,
-        'animalId': animalId,
-        'date': Timestamp.fromDate(date),
+  Map<String, dynamic> toMap() => {
+        'org_id': orgId,
+        'animal_id': animalId,
+        'date': date.toUtc().toIso8601String(),
         'event': event.name,
         if (method != null) 'method': method,
-        if (bullSireId != null) 'bullSireId': bullSireId,
-        if (technicianName != null) 'technicianName': technicianName,
+        if (bullSireId != null) 'bull_sire_id': bullSireId,
+        if (technicianName != null) 'technician_name': technicianName,
         if (expectedCalvingDate != null)
-          'expectedCalvingDate': Timestamp.fromDate(expectedCalvingDate!),
+          'expected_calving_date': expectedCalvingDate!.toUtc().toIso8601String(),
         if (notes != null) 'notes': notes,
-        'createdBy': createdBy,
+        'created_by': createdBy,
       };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// MedicalRecord — EXPANDED to a structured category + medicine/dosage shape
-// (was: a single free-text `treatment` string).
-//
-// Matches the same reasoning as the BreedingRecord expansion: a free-text
-// field can't be filtered, charted, or cost-broken-down by the Admin
-// Dashboard later (e.g. "total spent on Mastitis treatment this quarter"),
-// and farmers benefit from a dropdown over typing the same handful of
-// recurring treatment types from scratch every time, especially on a phone
-// keyboard in a cowshed. Category list matches the Sheets logbook's
-// Health Log vocabulary exactly, so terminology stays consistent across
-// the two products.
-//
-// MIGRATION NOTE: same caveat as BreedingRecord — if real MedicalRecord
-// documents already exist under the old `treatment: String` shape, they
-// won't parse against HealthCategory.values.firstWhere and will fall
-// through to the `other` fallback (see fromFirestore below) with the old
-// free-text preserved in `notes` instead of lost. That's a deliberate
-// least-harm fallback, not a substitute for a real migration script before
-// shipping if production data exists.
+// MedicalRecord — EXPANDED
 // ─────────────────────────────────────────────────────────────────────────
 enum HealthCategory {
   vaccination,
@@ -299,9 +235,9 @@ enum HealthCategory {
   injury,
   surgery,
   tickTreatment,
-  fmd, // Foot and Mouth Disease — "Mun Khar" locally
-  hemorrhagicSepticemia, // HS
-  blackQuarter, // BQ
+  fmd,
+  hemorrhagicSepticemia,
+  blackQuarter,
   routineCheckup,
   other,
 }
@@ -346,11 +282,11 @@ class MedicalRecord {
   final String orgId;
   final String animalId;
   final HealthCategory category;
-  final String? description; // free-text detail, e.g. "Annual FMD vaccine"
-  final String? medicine; // e.g. "Oxytetracycline"
-  final String? dosage; // e.g. "10ml IM"
+  final String? description;
+  final String? medicine;
+  final String? dosage;
   final String? vetName;
-  final double? cost; // PKR — optional, lets the dashboard sum health spend
+  final double? cost;
   final DateTime date;
   final DateTime? followUpDate;
   final String? notes;
@@ -372,48 +308,43 @@ class MedicalRecord {
     required this.createdBy,
   });
 
-  factory MedicalRecord.fromFirestore(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-
-    // Backward-compat: an old-shape doc has `treatment` (String) but no
-    // `category`. Preserve its content in notes rather than dropping it
-    // silently — see migration note above.
-    final hasOldShape = data.containsKey('treatment') && !data.containsKey('category');
-
+  factory MedicalRecord.fromMap(Map<String, dynamic> data) {
     return MedicalRecord(
-      id: doc.id,
-      orgId: data['orgId'] as String? ?? '',
-      animalId: data['animalId'] as String,
+      id: data['id'] as String? ?? '',
+      orgId: data['org_id'] as String? ?? data['orgId'] as String? ?? '',
+      animalId: data['animal_id'] as String? ?? data['animalId'] as String? ?? '',
       category: HealthCategory.values.firstWhere(
         (c) => c.name == data['category'],
         orElse: () => HealthCategory.other,
       ),
       description: data['description'] as String?,
-      medicine: data['medicine'] as String? ?? (hasOldShape ? data['vaccine'] as String? : null),
+      medicine: data['medicine'] as String?,
       dosage: data['dosage'] as String?,
-      vetName: data['vetName'] as String?,
+      vetName: data['vet_name'] as String? ?? data['vetName'] as String?,
       cost: (data['cost'] as num?)?.toDouble(),
-      date: (data['date'] as Timestamp).toDate(),
-      followUpDate: (data['followUpDate'] as Timestamp?)?.toDate(),
-      notes: hasOldShape
-          ? 'Imported from old format: ${data['treatment']}${data['notes'] != null ? ' — ${data['notes']}' : ''}'
-          : data['notes'] as String?,
-      createdBy: data['createdBy'] as String? ?? '',
+      date: DateTime.parse(data['date'] as String).toLocal(),
+      followUpDate: data['follow_up_date'] != null
+          ? DateTime.parse(data['follow_up_date'] as String).toLocal()
+          : data['followUpDate'] != null
+              ? DateTime.parse(data['followUpDate'] as String).toLocal()
+              : null,
+      notes: data['notes'] as String?,
+      createdBy: data['created_by'] as String? ?? data['createdBy'] as String? ?? '',
     );
   }
 
-  Map<String, dynamic> toFirestore() => {
-        'orgId': orgId,
-        'animalId': animalId,
+  Map<String, dynamic> toMap() => {
+        'org_id': orgId,
+        'animal_id': animalId,
         'category': category.name,
         if (description != null) 'description': description,
         if (medicine != null) 'medicine': medicine,
         if (dosage != null) 'dosage': dosage,
-        if (vetName != null) 'vetName': vetName,
+        if (vetName != null) 'vet_name': vetName,
         if (cost != null) 'cost': cost,
-        'date': Timestamp.fromDate(date),
-        if (followUpDate != null) 'followUpDate': Timestamp.fromDate(followUpDate!),
+        'date': date.toUtc().toIso8601String(),
+        if (followUpDate != null) 'follow_up_date': followUpDate!.toUtc().toIso8601String(),
         if (notes != null) 'notes': notes,
-        'createdBy': createdBy,
+        'created_by': createdBy,
       };
 }

@@ -11,11 +11,8 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Firebase core + services
-  firebase_core: ^3.1.0
-  firebase_auth: ^5.1.0
-  cloud_firestore: ^5.1.0
-  cloud_functions: ^5.0.0      # calls signUpOrgAdmin / inviteFarmer
+  # Supabase client
+  supabase_flutter: ^2.6.0
 
   # State management + routing
   flutter_riverpod: ^2.5.1     # auth/profile providers

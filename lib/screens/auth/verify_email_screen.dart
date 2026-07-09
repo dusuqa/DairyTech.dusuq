@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:dusuq/providers/auth_providers.dart';
 
 class VerifyEmailScreen extends ConsumerStatefulWidget {
@@ -31,10 +31,13 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   }
 
   Future<void> _checkEmailVerified() async {
-    final user = FirebaseAuth.instance.currentUser;
+    final client = Supabase.instance.client;
+    final user = client.auth.currentUser;
     if (user != null) {
-      await user.reload();
-      if (user.emailVerified) {
+      // Fetch user profile from auth service again to reload details
+      final updatedResponse = await client.auth.getUser();
+      final updatedUser = updatedResponse.user;
+      if (updatedUser != null && updatedUser.emailConfirmedAt != null) {
         _timer?.cancel();
         // Trigger a notifier update or refresh in providers
         ref.invalidate(authStateProvider);
@@ -72,7 +75,7 @@ class _VerifyEmailScreenState extends ConsumerState<VerifyEmailScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final user = FirebaseAuth.instance.currentUser;
+    final user = Supabase.instance.client.auth.currentUser;
 
     return Scaffold(
       backgroundColor: theme.colorScheme.surfaceContainerLowest,

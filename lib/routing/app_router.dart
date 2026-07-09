@@ -46,7 +46,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       // ── Email Verification Guard ──
       // If signed in via email, but email is not verified, force them to verify page.
       // (Excluding phone numbers which don't have email verification or have verified phone).
-      if (user.email != null && user.email!.isNotEmpty && !user.emailVerified) {
+      if (user.email != null && user.email!.isNotEmpty && user.emailConfirmedAt == null) {
         if (state.matchedLocation == '/verify-email') return null;
         return '/verify-email';
       }
