@@ -468,6 +468,17 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- 4. ROW LEVEL SECURITY (RLS) POLICIES
 -- ─────────────────────────────────────────────────────────────────────────────
 
+-- Helper functions to get current user's role and org_id without recursive policy check (run as SECURITY DEFINER)
+CREATE OR REPLACE FUNCTION public.get_my_role()
+RETURNS TEXT AS $$
+  SELECT role FROM public.profiles WHERE id = auth.uid();
+$$ LANGUAGE sql SECURITY DEFINER;
+
+CREATE OR REPLACE FUNCTION public.get_my_org_id()
+RETURNS UUID AS $$
+  SELECT org_id FROM public.profiles WHERE id = auth.uid();
+$$ LANGUAGE sql SECURITY DEFINER;
+
 -- Enable RLS on all tables
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
@@ -481,63 +492,63 @@ ALTER TABLE public.finance_records ENABLE ROW LEVEL SECURITY;
 -- Profiles Policies
 CREATE POLICY "Users can view their own profile"
   ON public.profiles FOR SELECT
-  USING (auth.uid() = id OR (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin');
+  USING (auth.uid() = id OR public.get_my_role() = 'SuperAdmin');
 
 CREATE POLICY "OrgAdmins can view profiles in their own org"
   ON public.profiles FOR SELECT
-  USING ((SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id AND (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'OrgAdmin');
+  USING (public.get_my_org_id() = org_id AND public.get_my_role() = 'OrgAdmin');
 
 CREATE POLICY "OrgAdmins can insert/update profiles in their own org"
   ON public.profiles FOR ALL
   USING (
-    (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-    ((SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id AND (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'OrgAdmin')
+    public.get_my_role() = 'SuperAdmin' OR
+    (public.get_my_org_id() = org_id AND public.get_my_role() = 'OrgAdmin')
   );
 
 -- Organizations Policies
 CREATE POLICY "Users can view their linked organization"
   ON public.organizations FOR SELECT
   USING (
-    (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-    (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = id
+    public.get_my_role() = 'SuperAdmin' OR
+    public.get_my_org_id() = id
   );
 
 CREATE POLICY "OrgAdmins can update their organization"
   ON public.organizations FOR UPDATE
   USING (
-    (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-    (owner_uid = auth.uid() AND (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'OrgAdmin')
+    public.get_my_role() = 'SuperAdmin' OR
+    (owner_uid = auth.uid() AND public.get_my_role() = 'OrgAdmin')
   );
 
 -- Generic Org-scoped RLS policies helper creator
 -- Applied to: animals, milk_records, breeding_records, feed_expenses, medical_records, finance_records
 
 CREATE POLICY "Animals org access" ON public.animals FOR ALL USING (
-  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-  (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id
+  public.get_my_role() = 'SuperAdmin' OR
+  public.get_my_org_id() = org_id
 );
 
 CREATE POLICY "Milk records org access" ON public.milk_records FOR ALL USING (
-  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-  (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id
+  public.get_my_role() = 'SuperAdmin' OR
+  public.get_my_org_id() = org_id
 );
 
 CREATE POLICY "Breeding records org access" ON public.breeding_records FOR ALL USING (
-  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-  (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id
+  public.get_my_role() = 'SuperAdmin' OR
+  public.get_my_org_id() = org_id
 );
 
 CREATE POLICY "Feed expenses org access" ON public.feed_expenses FOR ALL USING (
-  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-  (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id
+  public.get_my_role() = 'SuperAdmin' OR
+  public.get_my_org_id() = org_id
 );
 
 CREATE POLICY "Medical records org access" ON public.medical_records FOR ALL USING (
-  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-  (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id
+  public.get_my_role() = 'SuperAdmin' OR
+  public.get_my_org_id() = org_id
 );
 
 CREATE POLICY "Finance records org access" ON public.finance_records FOR ALL USING (
-  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'SuperAdmin' OR
-  (SELECT org_id FROM public.profiles WHERE id = auth.uid()) = org_id
+  public.get_my_role() = 'SuperAdmin' OR
+  public.get_my_org_id() = org_id
 );
