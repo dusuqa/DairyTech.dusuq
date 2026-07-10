@@ -3,6 +3,17 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Clean up existing database objects to allow fresh execution
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users CASCADE;
+DROP TABLE IF EXISTS public.finance_records CASCADE;
+DROP TABLE IF EXISTS public.medical_records CASCADE;
+DROP TABLE IF EXISTS public.feed_expenses CASCADE;
+DROP TABLE IF EXISTS public.breeding_records CASCADE;
+DROP TABLE IF EXISTS public.milk_records CASCADE;
+DROP TABLE IF EXISTS public.animals CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+DROP TABLE IF EXISTS public.organizations CASCADE;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. TABLES SETUP
 -- ─────────────────────────────────────────────────────────────────────────────
